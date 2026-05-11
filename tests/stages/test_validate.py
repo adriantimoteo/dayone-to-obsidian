@@ -88,10 +88,11 @@ def test_sparse_metadata_warning(tmp_path):
 
 
 def test_not_sparse_when_enough_metadata(tmp_path):
-    from jkb.models.dayone import DayOneLocation
+    from jkb.models.dayone import DayOneLocation, DayOneWeather
     loc = DayOneLocation(latitude=14.5, longitude=121.0)
-    # Only missing weather, activity, device (3 missing but timezone is non-UTC → only 3 total)
-    entry = _entry(location=loc, weather=None, activity=None, device=None, timezone="Asia/Manila")
+    weather = DayOneWeather(temperatureCelsius=31.0)
+    # Only missing activity, device (2 missing, timezone non-UTC) → below sparse threshold
+    entry = _entry(location=loc, weather=weather, activity=None, device=None, timezone="Asia/Manila")
     _, result = list(validate([entry], tmp_path))[0]
     assert ValidationWarning.SPARSE_METADATA not in result.warnings
 

@@ -87,7 +87,7 @@ def _check_sparse_metadata(entry: NormalizedEntry, result: ValidationResult) -> 
         entry.device is None,
         entry.timezone == "UTC",
     ])
-    if missing_count >= 4:
+    if missing_count >= 3:
         result.warnings.append(ValidationWarning.SPARSE_METADATA)
 
 
