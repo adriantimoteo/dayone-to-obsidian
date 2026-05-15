@@ -117,15 +117,28 @@ def index(
 @app.command()
 def ask(
     question: str = typer.Argument(..., help="Natural-language question to ask your journal"),
-    model: str = typer.Option("claude-haiku-4-5-20251001", "--model", help="LLM model to use for synthesis"),
-    backend: str = typer.Option("anthropic", "--backend", help="LLM backend: anthropic | openai"),
+    model: str = typer.Option(None, "--model", help="LLM model (default: llama3.2 for ollama, claude-haiku-4-5-20251001 for anthropic)"),
+    backend: str = typer.Option("ollama", "--backend", help="LLM backend: ollama | anthropic | openai"),
     base_url: str = typer.Option(None, "--base-url", help="Base URL for OpenAI-compatible endpoints"),
+    ollama_host: str = typer.Option("http://localhost:11434", "--ollama-host", help="Ollama server URL"),
     k: int = typer.Option(10, "--k", help="Number of chunks to retrieve"),
     vault: Path = typer.Option(None, "--vault", help="Path to the vault directory (default: $JKB_VAULT or ./.chroma)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show retrieved chunks before the answer"),
 ) -> None:
-    """Ask a natural-language question and get an answer grounded in your journal."""
+    """Ask a natural-language question and get an answer grounded in your journal.
+
+    Runs fully locally by default using Ollama (https://ollama.com):
+
+        ollama pull llama3.2
+        ollama serve
+        jkb ask "when was I last in Sagada?"
+
+    For cloud synthesis use --backend anthropic or --backend openai.
+    """
     console = Console()
+
+    if model is None:
+        model = "llama3.2" if backend == "ollama" else "claude-haiku-4-5-20251001"
 
     vault_path: Path
     if vault is not None:
@@ -144,15 +157,17 @@ def ask(
         )
         raise typer.Exit(code=1)
 
-    from jkb.query.backends import AnthropicBackend, OpenAIBackend  # noqa: PLC0415
+    from jkb.query.backends import AnthropicBackend, OllamaBackend, OpenAIBackend  # noqa: PLC0415
 
     try:
-        if backend == "anthropic":
+        if backend == "ollama":
+            llm_backend = OllamaBackend(host=ollama_host)
+        elif backend == "anthropic":
             llm_backend = AnthropicBackend()
         elif backend == "openai":
             llm_backend = OpenAIBackend(base_url=base_url)
         else:
-            typer.echo(f"Error: unknown backend {backend!r}. Choose from: anthropic, openai", err=True)
+            typer.echo(f"Error: unknown backend {backend!r}. Choose from: ollama, anthropic, openai", err=True)
             raise typer.Exit(code=1)
     except (ImportError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -183,7 +198,11 @@ def ask(
         console.print(table)
 
     synthesizer = Synthesizer(llm_backend, model=model)
-    synthesis = synthesizer.synthesize(question, results)
+    try:
+        synthesis = synthesizer.synthesize(question, results)
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1)
 
     console.print(Panel(synthesis.answer, title="Answer", border_style="green"))
 

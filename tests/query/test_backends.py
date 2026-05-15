@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from jkb.query.backends import AnthropicBackend, LLMBackend, OpenAIBackend
+from jkb.query.backends import AnthropicBackend, LLMBackend, OllamaBackend, OpenAIBackend
 
 
 # ---------------------------------------------------------------------------
@@ -156,3 +156,79 @@ def test_openai_backend_accepts_explicit_api_key(monkeypatch):
 def test_openai_backend_lazy_loads_openai_client():
     backend = OpenAIBackend(api_key="sk-test")
     assert backend._client is None
+
+
+# ---------------------------------------------------------------------------
+# OllamaBackend
+# ---------------------------------------------------------------------------
+
+def test_ollama_backend_is_llm_backend():
+    assert isinstance(OllamaBackend(), LLMBackend)
+
+
+def test_ollama_backend_is_openai_backend_subclass():
+    assert isinstance(OllamaBackend(), OpenAIBackend)
+
+
+def test_ollama_backend_default_host():
+    backend = OllamaBackend()
+    assert backend._base_url == "http://localhost:11434/v1"
+    assert backend._api_key == "ollama"
+
+
+def test_ollama_backend_custom_host():
+    backend = OllamaBackend(host="http://192.168.1.10:11434")
+    assert backend._base_url == "http://192.168.1.10:11434/v1"
+
+
+def test_ollama_backend_complete_calls_chat_completions():
+    client = _make_openai_client("local answer")
+
+    with patch("openai.OpenAI", return_value=client):
+        backend = OllamaBackend()
+        result = backend.complete(system="sys", user="usr", model="llama3.2", max_tokens=512)
+
+    assert result == "local answer"
+    client.chat.completions.create.assert_called_once()
+    call_kwargs = client.chat.completions.create.call_args[1]
+    assert call_kwargs["model"] == "llama3.2"
+
+
+def test_ollama_backend_translates_connect_error():
+    backend = OllamaBackend()
+
+    class _FakeConnectError(Exception):
+        pass
+
+    with patch("httpx.ConnectError", _FakeConnectError):
+        with patch.object(
+            backend, "_get_client",
+            side_effect=_FakeConnectError("connection refused"),
+        ):
+            with pytest.raises(RuntimeError, match="ollama serve"):
+                backend.complete(system="s", user="u", model="llama3.2", max_tokens=100)
+
+
+def test_ollama_backend_translates_connection_refused_error():
+    backend = OllamaBackend()
+    with patch.object(
+        backend, "_get_client",
+        side_effect=ConnectionRefusedError("refused"),
+    ):
+        with pytest.raises(RuntimeError, match="ollama serve"):
+            backend.complete(system="s", user="u", model="llama3.2", max_tokens=100)
+
+
+def test_ollama_backend_translates_model_not_found():
+    backend = OllamaBackend()
+
+    class _FakeNotFoundError(Exception):
+        pass
+
+    with patch("openai.NotFoundError", _FakeNotFoundError):
+        with patch.object(
+            backend, "_get_client",
+            side_effect=_FakeNotFoundError("404"),
+        ):
+            with pytest.raises(RuntimeError, match="ollama pull llama3.2"):
+                backend.complete(system="s", user="u", model="llama3.2", max_tokens=100)
