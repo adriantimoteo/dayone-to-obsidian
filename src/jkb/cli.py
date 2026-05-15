@@ -4,6 +4,10 @@ from pathlib import Path
 
 import typer
 
+from jkb.index.embedder import get_embedder
+from jkb.index.manifest import Manifest
+from jkb.index.pipeline import run_index
+from jkb.index.vectorstore import VectorStore
 from jkb.pipeline import process_entry
 from jkb.stages.parse import parse
 from jkb.stages.validate import validate
@@ -74,4 +78,31 @@ def migrate(
         f"Migration complete: {migration_log._total_written} written, "
         f"{migration_log._total_skipped} skipped, "
         f"{migration_log._total_warned} with warnings."
+    )
+
+
+@app.command()
+def index(
+    vault_path: Path = typer.Argument(..., help="Path to the vault directory to index"),
+    force_reindex: bool = typer.Option(False, "--force-reindex/--no-force-reindex", help="Re-index all files regardless of hash"),
+    model: str = typer.Option("nomic", "--model", help="Embedding model name"),
+    chroma_path: Path = typer.Option(None, "--chroma-path", help="Path for Chroma DB (default: <vault>/.chroma)"),
+    manifest_path: Path = typer.Option(None, "--manifest-path", help="Path for index manifest (default: <vault>/index-manifest.json)"),
+) -> None:
+    """Index vault Markdown files into the vector store."""
+    if not vault_path.exists():
+        typer.echo(f"Error: vault path does not exist: {vault_path}", err=True)
+        raise typer.Exit(code=1)
+
+    chroma = chroma_path or vault_path / ".chroma"
+    manifest = manifest_path or vault_path / "index-manifest.json"
+
+    typer.echo("Indexing vault...")
+    store = VectorStore(chroma)
+    mfst = Manifest(manifest)
+    embedder = get_embedder(model)
+    stats = run_index(vault_path, store, mfst, embedder, force=force_reindex)
+    typer.echo(
+        f"Index complete: {stats.added} added, {stats.updated} updated, "
+        f"{stats.removed} removed, {stats.skipped} skipped."
     )
