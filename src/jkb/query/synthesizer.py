@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from jkb.query.backends import AnthropicBackend, LLMBackend
 from jkb.query.search import SearchResult
 
 _SYSTEM_PROMPT = """\
@@ -41,7 +42,7 @@ class SynthesisResult(BaseModel):
 
 class Synthesizer:
     def __init__(self, client: Any, model: str = "claude-haiku-4-5-20251001") -> None:
-        self._client = client
+        self._backend: LLMBackend = client if isinstance(client, LLMBackend) else AnthropicBackend(client)
         self._model = model
 
     def synthesize(self, query: str, results: list[SearchResult]) -> SynthesisResult:
@@ -51,14 +52,12 @@ class Synthesizer:
         context = _format_context(results)
         user_message = f"Question: {query}\n\nJournal entries:\n{context}"
 
-        response = self._client.messages.create(
+        answer = self._backend.complete(
+            system=_SYSTEM_PROMPT,
+            user=user_message,
             model=self._model,
             max_tokens=1024,
-            system=_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
         )
-
-        answer = response.content[0].text
         sources = _extract_sources(answer)
         return SynthesisResult(answer=answer, sources=sources)
 
