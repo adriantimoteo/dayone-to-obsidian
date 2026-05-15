@@ -107,3 +107,101 @@ def test_journal_name_from_json_filename(tmp_path):
     staging.mkdir()
     entries = list(parse(zip_path, staging))
     assert entries[0].journal == "MyDiary"
+
+
+# TC-PARSE-08
+def test_parse_zip_no_media_dirs(tmp_path):
+    zip_path = _make_dayone_zip(tmp_path / "zips", "NoMedia", [_minimal_entry()])
+    # No photos= kwarg → no media dirs in ZIP
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    entries = list(parse(zip_path, staging))
+    assert len(entries) == 1
+    assert not any(staging.rglob("*.*"))  # nothing extracted
+
+
+# TC-PARSE-09
+def test_parse_multi_journal_zip(tmp_path):
+    zip_path = tmp_path / "Multi.dayone"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("Journal1.json", json.dumps({"entries": [_minimal_entry("J1-001"), _minimal_entry("J1-002")]}))
+        zf.writestr("Journal2.json", json.dumps({"entries": [_minimal_entry("J2-001"), _minimal_entry("J2-002")]}))
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    entries = list(parse(zip_path, staging))
+    assert len(entries) == 4
+    j1 = [e for e in entries if e.journal == "Journal1"]
+    j2 = [e for e in entries if e.journal == "Journal2"]
+    assert len(j1) == 2
+    assert len(j2) == 2
+
+
+# TC-PARSE-10
+def test_parse_media_not_reextracted_if_present(tmp_path):
+    photos = {"abc123.jpeg": b"original_bytes"}
+    zip_path = _make_dayone_zip(tmp_path / "zips", "Test", [_minimal_entry()], photos=photos)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    # First parse — extracts file
+    list(parse(zip_path, staging))
+    extracted = staging / "Test" / "photos" / "abc123.jpeg"
+    assert extracted.exists()
+    # Overwrite with sentinel
+    extracted.write_bytes(b"sentinel")
+    # Second parse — should NOT re-extract
+    list(parse(zip_path, staging))
+    assert extracted.read_bytes() == b"sentinel"
+
+
+# TC-PARSE-11
+def test_parse_missing_timezone_defaults_to_utc(tmp_path):
+    entry = _minimal_entry()
+    del entry["timeZone"]
+    zip_path = _make_dayone_zip(tmp_path / "zips", "Test", [entry])
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    entries = list(parse(zip_path, staging))
+    assert entries[0].timezone == "UTC"
+
+
+# TC-PARSE-12
+def test_parse_null_text_normalized(tmp_path):
+    entry = _minimal_entry()
+    entry["text"] = None
+    zip_path = _make_dayone_zip(tmp_path / "zips", "Test", [entry])
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    entries = list(parse(zip_path, staging))
+    assert entries[0].text == ""
+
+
+# TC-PARSE-13
+def test_parse_photos_and_pdfs(tmp_path):
+    entry = _minimal_entry()
+    entry["photos"] = [{"identifier": "P1", "md5": "aaa", "type": "jpeg"}]
+    entry["pdfAttachments"] = [{"identifier": "D1", "md5": "bbb", "type": "pdf"}]
+    zip_path = _make_dayone_zip(tmp_path / "zips", "Test", [entry])
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    entries = list(parse(zip_path, staging))
+    assert len(entries[0].photos) == 1
+    assert len(entries[0].pdfs) == 1
+
+
+# TC-PARSE-14
+def test_parse_nonexistent_path(tmp_path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    entries = list(parse(tmp_path / "nonexistent.dayone", staging))
+    assert entries == []
+
+
+# TC-PARSE-15
+def test_parse_directory_ignores_non_dayone(tmp_path):
+    zip_dir = tmp_path / "zips"
+    _make_dayone_zip(zip_dir, "Journal", [_minimal_entry()])
+    (zip_dir / "notes.txt").write_text("ignore me")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    entries = list(parse(zip_dir, staging))
+    assert len(entries) == 1
