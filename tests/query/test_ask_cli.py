@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
 from jkb.cli import app
+from jkb.query.backends import AnthropicBackend, OpenAIBackend
 from jkb.query.search import SearchResult
 from jkb.query.synthesizer import SynthesisResult
 
@@ -213,3 +215,100 @@ def test_default_k_is_10(tmp_path, mocker):
     runner.invoke(app, ["ask", "test query", "--vault", str(tmp_path)])
 
     mock_searcher_instance.search.assert_called_once_with("test query", k=10)
+
+
+# ---------------------------------------------------------------------------
+# 9. --backend flag selects backend
+# ---------------------------------------------------------------------------
+
+
+def test_backend_anthropic_is_default(tmp_path, mocker):
+    chroma = tmp_path / ".chroma"
+    results = [_make_search_result()]
+    synthesis = _make_synthesis_result()
+
+    _, mock_synth_cls, _, _ = _patch_ask(mocker, chroma, results, synthesis)
+
+    result = runner.invoke(app, ["ask", "test query", "--vault", str(tmp_path)])
+
+    assert result.exit_code == 0
+    call_args = mock_synth_cls.call_args
+    backend_arg = call_args.args[0] if call_args.args else call_args.kwargs.get("client")
+    assert isinstance(backend_arg, AnthropicBackend)
+
+
+def test_backend_openai_flag(tmp_path, mocker):
+    chroma = tmp_path / ".chroma"
+    results = [_make_search_result()]
+    synthesis = _make_synthesis_result()
+
+    _, mock_synth_cls, _, _ = _patch_ask(mocker, chroma, results, synthesis)
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}):
+        result = runner.invoke(
+            app, ["ask", "test query", "--vault", str(tmp_path), "--backend", "openai"]
+        )
+
+    assert result.exit_code == 0
+    call_args = mock_synth_cls.call_args
+    backend_arg = call_args.args[0] if call_args.args else call_args.kwargs.get("client")
+    assert isinstance(backend_arg, OpenAIBackend)
+
+
+def test_backend_openai_missing_api_key_exits_1(tmp_path, mocker):
+    chroma = tmp_path / ".chroma"
+    chroma.mkdir(parents=True)
+
+    with patch.dict(os.environ, {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}, clear=True):
+        result = runner.invoke(
+            app, ["ask", "test query", "--vault", str(tmp_path), "--backend", "openai"]
+        )
+
+    assert result.exit_code == 1
+    combined = result.output + (result.stderr or "")
+    assert "OPENAI_API_KEY" in combined
+
+
+def test_backend_unknown_exits_1(tmp_path, mocker):
+    chroma = tmp_path / ".chroma"
+    chroma.mkdir(parents=True)
+    mocker.patch("jkb.cli.VectorStore")
+    mocker.patch("jkb.cli.get_embedder", return_value=MagicMock())
+    mocker.patch("jkb.cli.HybridSearcher")
+    mocker.patch("jkb.cli.Synthesizer")
+
+    result = runner.invoke(
+        app, ["ask", "test query", "--vault", str(tmp_path), "--backend", "invalid"]
+    )
+
+    assert result.exit_code == 1
+    assert "unknown backend" in result.output.lower() or "unknown backend" in (result.stderr or "").lower()
+
+
+# ---------------------------------------------------------------------------
+# 10. --base-url is forwarded to OpenAIBackend
+# ---------------------------------------------------------------------------
+
+
+def test_base_url_forwarded_to_openai_backend(tmp_path, mocker):
+    chroma = tmp_path / ".chroma"
+    results = [_make_search_result()]
+    synthesis = _make_synthesis_result()
+
+    _, mock_synth_cls, _, _ = _patch_ask(mocker, chroma, results, synthesis)
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}):
+        result = runner.invoke(
+            app,
+            [
+                "ask", "test query", "--vault", str(tmp_path),
+                "--backend", "openai",
+                "--base-url", "https://my.endpoint/v1",
+            ],
+        )
+
+    assert result.exit_code == 0
+    call_args = mock_synth_cls.call_args
+    backend_arg = call_args.args[0] if call_args.args else call_args.kwargs.get("client")
+    assert isinstance(backend_arg, OpenAIBackend)
+    assert backend_arg._base_url == "https://my.endpoint/v1"

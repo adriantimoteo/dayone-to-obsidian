@@ -118,18 +118,14 @@ def index(
 def ask(
     question: str = typer.Argument(..., help="Natural-language question to ask your journal"),
     model: str = typer.Option("claude-haiku-4-5-20251001", "--model", help="LLM model to use for synthesis"),
+    backend: str = typer.Option("anthropic", "--backend", help="LLM backend: anthropic | openai"),
+    base_url: str = typer.Option(None, "--base-url", help="Base URL for OpenAI-compatible endpoints"),
     k: int = typer.Option(10, "--k", help="Number of chunks to retrieve"),
     vault: Path = typer.Option(None, "--vault", help="Path to the vault directory (default: $JKB_VAULT or ./.chroma)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show retrieved chunks before the answer"),
 ) -> None:
     """Ask a natural-language question and get an answer grounded in your journal."""
     console = Console()
-
-    try:
-        import anthropic  # noqa: PLC0415
-    except ImportError:
-        typer.echo("Error: anthropic package is not installed. Run `uv add anthropic` to enable LLM synthesis.", err=True)
-        raise typer.Exit(code=1)
 
     vault_path: Path
     if vault is not None:
@@ -148,10 +144,18 @@ def ask(
         )
         raise typer.Exit(code=1)
 
+    from jkb.query.backends import AnthropicBackend, OpenAIBackend  # noqa: PLC0415
+
     try:
-        client = anthropic.Anthropic()
-    except Exception as exc:
-        typer.echo(f"Error initialising Anthropic client: {exc}", err=True)
+        if backend == "anthropic":
+            llm_backend = AnthropicBackend()
+        elif backend == "openai":
+            llm_backend = OpenAIBackend(base_url=base_url)
+        else:
+            typer.echo(f"Error: unknown backend {backend!r}. Choose from: anthropic, openai", err=True)
+            raise typer.Exit(code=1)
+    except (ImportError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1)
 
     console.print("Searching your journal...", style="bold")
@@ -178,7 +182,7 @@ def ask(
             table.add_row(r.entry_id, f"{r.score:.3f}", excerpt)
         console.print(table)
 
-    synthesizer = Synthesizer(client, model=model)
+    synthesizer = Synthesizer(llm_backend, model=model)
     synthesis = synthesizer.synthesize(question, results)
 
     console.print(Panel(synthesis.answer, title="Answer", border_style="green"))
