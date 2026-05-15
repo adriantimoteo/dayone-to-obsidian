@@ -32,6 +32,9 @@ def _build_chroma_metadata(chunk: Chunk) -> dict[str, Any]:
         if field == "tags":
             # ChromaDB only stores strings/numbers; serialize list as pipe-separated
             out[field] = "|".join(val) if isinstance(val, list) else str(val)
+        elif field == "coords":
+            # [lat, lon] list → "lat,lon" string
+            out[field] = ",".join(str(x) for x in val) if isinstance(val, list) else str(val)
         elif field == "starred":
             out[field] = int(bool(val))
         else:
@@ -49,6 +52,8 @@ def _parse_chroma_metadata(raw: dict[str, Any]) -> tuple[dict[str, Any], str, in
         val = raw[field]
         if field == "tags":
             meta[field] = val.split("|") if val else []
+        elif field == "coords":
+            meta[field] = [float(x) for x in val.split(",")] if val else []
         elif field == "starred":
             meta[field] = bool(val)
         else:

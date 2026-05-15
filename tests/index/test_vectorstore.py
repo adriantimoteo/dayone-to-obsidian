@@ -175,3 +175,15 @@ def test_none_metadata_values_omitted():
     assert results[0].text == "Sparse metadata"
     assert "tags" not in results[0].metadata
     assert "location_name" not in results[0].metadata
+
+
+# ---------------------------------------------------------------------------
+# Test 10: coords round-trip — [lat, lon] list serialized/deserialized correctly
+# ---------------------------------------------------------------------------
+
+def test_coords_round_trip():
+    store = _store()
+    chunk = _chunk("Location entry", entry_id="e10", coords=[14.5547, 121.0244])
+    store.add([(chunk, A_VEC)])
+    results = store.query(A_VEC, n_results=1)
+    assert results[0].metadata["coords"] == [14.5547, 121.0244]
