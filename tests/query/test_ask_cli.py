@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from jkb.cli import app
-from jkb.query.backends import AnthropicBackend, OpenAIBackend
+from jkb.query.backends import AnthropicBackend, OllamaBackend, OpenAIBackend
 from jkb.query.search import SearchResult
 from jkb.query.synthesizer import SynthesisResult
 
@@ -222,7 +222,7 @@ def test_default_k_is_10(tmp_path, mocker):
 # ---------------------------------------------------------------------------
 
 
-def test_backend_anthropic_is_default(tmp_path, mocker):
+def test_backend_ollama_is_default(tmp_path, mocker):
     chroma = tmp_path / ".chroma"
     results = [_make_search_result()]
     synthesis = _make_synthesis_result()
@@ -234,7 +234,7 @@ def test_backend_anthropic_is_default(tmp_path, mocker):
     assert result.exit_code == 0
     call_args = mock_synth_cls.call_args
     backend_arg = call_args.args[0] if call_args.args else call_args.kwargs.get("client")
-    assert isinstance(backend_arg, AnthropicBackend)
+    assert isinstance(backend_arg, OllamaBackend)
 
 
 def test_backend_openai_flag(tmp_path, mocker):
@@ -312,3 +312,130 @@ def test_base_url_forwarded_to_openai_backend(tmp_path, mocker):
     backend_arg = call_args.args[0] if call_args.args else call_args.kwargs.get("client")
     assert isinstance(backend_arg, OpenAIBackend)
     assert backend_arg._base_url == "https://my.endpoint/v1"
+
+
+# ---------------------------------------------------------------------------
+# 11. Ollama-specific CLI behaviour
+# ---------------------------------------------------------------------------
+
+
+def test_backend_anthropic_flag(tmp_path, mocker):
+    chroma = tmp_path / ".chroma"
+    results = [_make_search_result()]
+    synthesis = _make_synthesis_result()
+
+    _, mock_synth_cls, _, _ = _patch_ask(mocker, chroma, results, synthesis)
+
+    result = runner.invoke(
+        app, ["ask", "test query", "--vault", str(tmp_path), "--backend", "anthropic"]
+    )
+
+    assert result.exit_code == 0
+    call_args = mock_synth_cls.call_args
+    backend_arg = call_args.args[0] if call_args.args else call_args.kwargs.get("client")
+    assert isinstance(backend_arg, AnthropicBackend)
+
+
+def test_backend_ollama_flag(tmp_path, mocker):
+    chroma = tmp_path / ".chroma"
+    results = [_make_search_result()]
+    synthesis = _make_synthesis_result()
+
+    _, mock_synth_cls, _, _ = _patch_ask(mocker, chroma, results, synthesis)
+
+    result = runner.invoke(
+        app, ["ask", "test query", "--vault", str(tmp_path), "--backend", "ollama"]
+    )
+
+    assert result.exit_code == 0
+    call_args = mock_synth_cls.call_args
+    backend_arg = call_args.args[0] if call_args.args else call_args.kwargs.get("client")
+    assert isinstance(backend_arg, OllamaBackend)
+
+
+def test_ollama_host_forwarded(tmp_path, mocker):
+    chroma = tmp_path / ".chroma"
+    results = [_make_search_result()]
+    synthesis = _make_synthesis_result()
+
+    _, mock_synth_cls, _, _ = _patch_ask(mocker, chroma, results, synthesis)
+
+    result = runner.invoke(
+        app,
+        ["ask", "test query", "--vault", str(tmp_path),
+         "--backend", "ollama", "--ollama-host", "http://192.168.1.10:11434"],
+    )
+
+    assert result.exit_code == 0
+    call_args = mock_synth_cls.call_args
+    backend_arg = call_args.args[0] if call_args.args else call_args.kwargs.get("client")
+    assert isinstance(backend_arg, OllamaBackend)
+    assert backend_arg._base_url == "http://192.168.1.10:11434/v1"
+
+
+def test_default_model_is_llama32_for_ollama(tmp_path, mocker):
+    chroma = tmp_path / ".chroma"
+    results = [_make_search_result()]
+    synthesis = _make_synthesis_result()
+
+    _, mock_synth_cls, _, _ = _patch_ask(mocker, chroma, results, synthesis)
+
+    runner.invoke(app, ["ask", "test query", "--vault", str(tmp_path), "--backend", "ollama"])
+
+    call_kwargs = mock_synth_cls.call_args.kwargs
+    assert call_kwargs.get("model") == "llama3.2"
+
+
+def test_default_model_is_haiku_for_anthropic(tmp_path, mocker):
+    chroma = tmp_path / ".chroma"
+    results = [_make_search_result()]
+    synthesis = _make_synthesis_result()
+
+    _, mock_synth_cls, _, _ = _patch_ask(mocker, chroma, results, synthesis)
+
+    runner.invoke(app, ["ask", "test query", "--vault", str(tmp_path), "--backend", "anthropic"])
+
+    call_kwargs = mock_synth_cls.call_args.kwargs
+    assert call_kwargs.get("model") == "claude-haiku-4-5-20251001"
+
+
+def test_ollama_not_running_exits_1(tmp_path, mocker):
+    chroma = tmp_path / ".chroma"
+    results = [_make_search_result()]
+
+    chroma.mkdir(parents=True)
+    mocker.patch("jkb.cli.VectorStore")
+    mocker.patch("jkb.cli.get_embedder", return_value=MagicMock())
+    mock_searcher_cls = mocker.patch("jkb.cli.HybridSearcher")
+    mock_searcher_cls.return_value.search.return_value = results
+
+    mock_synth_cls = mocker.patch("jkb.cli.Synthesizer")
+    mock_synth_cls.return_value.synthesize.side_effect = RuntimeError(
+        "Ollama is not running. Start it with: ollama serve"
+    )
+
+    result = runner.invoke(app, ["ask", "test query", "--vault", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert "ollama serve" in result.output or "ollama serve" in (result.stderr or "")
+
+
+def test_ollama_model_not_found_exits_1(tmp_path, mocker):
+    chroma = tmp_path / ".chroma"
+    results = [_make_search_result()]
+
+    chroma.mkdir(parents=True)
+    mocker.patch("jkb.cli.VectorStore")
+    mocker.patch("jkb.cli.get_embedder", return_value=MagicMock())
+    mock_searcher_cls = mocker.patch("jkb.cli.HybridSearcher")
+    mock_searcher_cls.return_value.search.return_value = results
+
+    mock_synth_cls = mocker.patch("jkb.cli.Synthesizer")
+    mock_synth_cls.return_value.synthesize.side_effect = RuntimeError(
+        "Model not found. Run: ollama pull llama3.2"
+    )
+
+    result = runner.invoke(app, ["ask", "test query", "--vault", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert "ollama pull" in result.output or "ollama pull" in (result.stderr or "")

@@ -3,6 +3,26 @@ from __future__ import annotations
 import os
 from abc import ABC, abstractmethod
 
+_OLLAMA_DEFAULT_HOST = "http://localhost:11434"
+
+
+def _raise_if_ollama_error(exc: BaseException, model: str) -> None:
+    """Translate common Ollama failure modes into actionable RuntimeError messages."""
+    if isinstance(exc, ConnectionRefusedError):
+        raise RuntimeError("Ollama is not running. Start it with: ollama serve") from exc
+    try:
+        import httpx  # noqa: PLC0415
+        if isinstance(exc, httpx.ConnectError):
+            raise RuntimeError("Ollama is not running. Start it with: ollama serve") from exc
+    except ImportError:
+        pass
+    try:
+        import openai  # noqa: PLC0415
+        if isinstance(exc, openai.NotFoundError):
+            raise RuntimeError(f"Model not found. Run: ollama pull {model}") from exc
+    except ImportError:
+        pass
+
 
 class LLMBackend(ABC):
     @abstractmethod
@@ -66,3 +86,26 @@ class OpenAIBackend(LLMBackend):
             ],
         )
         return response.choices[0].message.content
+
+
+class OllamaBackend(OpenAIBackend):
+    """LLM backend that routes requests to a local Ollama server.
+
+    Ollama exposes an OpenAI-compatible API, so this is a thin wrapper around
+    OpenAIBackend with a fixed api_key and translated error messages.
+
+    Setup:
+        Install from https://ollama.com, then:
+            ollama pull llama3.2
+            ollama serve          # runs automatically on Windows after install
+    """
+
+    def __init__(self, host: str = _OLLAMA_DEFAULT_HOST) -> None:
+        super().__init__(base_url=f"{host}/v1", api_key="ollama")
+
+    def complete(self, system: str, user: str, model: str, max_tokens: int) -> str:
+        try:
+            return super().complete(system, user, model, max_tokens)
+        except Exception as exc:
+            _raise_if_ollama_error(exc, model)
+            raise
