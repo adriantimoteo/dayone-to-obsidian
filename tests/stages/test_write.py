@@ -100,3 +100,95 @@ def test_utc_fallback_for_unknown_timezone(tmp_path):
     # Falls back to UTC: 06:32 UTC → directory 2018/04 still correct
     assert path.parent.parent.name == "2018"
     assert path.parent.name == "04"
+
+
+# TC-WRITE-08
+def test_uuid_in_filename_is_lowercase(tmp_path):
+    from jkb.models.entry import NormalizedEntry
+    from jkb.stages.write import write_entry
+    from datetime import datetime, timezone
+    entry = NormalizedEntry(
+        uuid="A1B2C3D4EFGH", journal="Test",
+        creation_date=datetime(2020,6,15,10,30,tzinfo=timezone.utc),
+    )
+    path = write_entry(entry, {"date": "2020-06-15T10:30:00Z", "journal": "Test", "starred": False, "location": None, "weather": None, "activity": None, "device": None, "timezone": "UTC", "tags": [], "people": [], "pinned": False, "duration_seconds": None, "modified": None}, "body\n", tmp_path)
+    assert path is not None
+    assert "a1b2c3d4" in path.name
+    assert "A1B2C3D4" not in path.name
+
+
+# TC-WRITE-09
+def test_invalid_timezone_falls_back_to_utc(tmp_path):
+    from jkb.models.entry import NormalizedEntry
+    from jkb.stages.write import write_entry
+    from datetime import datetime, timezone
+    entry = NormalizedEntry(
+        uuid="TZ0001", journal="Test",
+        creation_date=datetime(2020,6,15,10,30,tzinfo=timezone.utc),
+        timezone="Fake/Zone",
+    )
+    fm = {"date": "2020-06-15T10:30:00Z", "journal": "Test", "starred": False, "location": None, "weather": None, "activity": None, "device": None, "timezone": "Fake/Zone", "tags": [], "people": [], "pinned": False, "duration_seconds": None, "modified": None}
+    path = write_entry(entry, fm, "body\n", tmp_path)
+    assert path is not None
+    assert (tmp_path / "2020" / "06").exists()
+
+
+# TC-WRITE-10
+def test_utf8_content_preserved(tmp_path):
+    from jkb.models.entry import NormalizedEntry
+    from jkb.stages.write import write_entry
+    from datetime import datetime, timezone
+    text = "日本語テスト 🎉"
+    entry = NormalizedEntry(
+        uuid="UTF8001", journal="Test",
+        creation_date=datetime(2020,6,15,10,30,tzinfo=timezone.utc),
+    )
+    fm = {"date": "2020-06-15T10:30:00Z", "journal": "Test", "starred": False, "location": None, "weather": None, "activity": None, "device": None, "timezone": "UTC", "tags": [], "people": [], "pinned": False, "duration_seconds": None, "modified": None}
+    path = write_entry(entry, fm, text + "\n", tmp_path)
+    content = path.read_text(encoding="utf-8")
+    assert text in content
+
+
+# TC-WRITE-11
+def test_atomic_write_temp_cleaned_up_on_failure(tmp_path, monkeypatch):
+    import os
+    from jkb.models.entry import NormalizedEntry
+    from jkb.stages.write import write_entry
+    from datetime import datetime, timezone
+    entry = NormalizedEntry(
+        uuid="ATOMIC1", journal="Test",
+        creation_date=datetime(2020,6,15,10,30,tzinfo=timezone.utc),
+    )
+    fm = {"date": "2020-06-15T10:30:00Z", "journal": "Test", "starred": False, "location": None, "weather": None, "activity": None, "device": None, "timezone": "UTC", "tags": [], "people": [], "pinned": False, "duration_seconds": None, "modified": None}
+    monkeypatch.setattr(os, "replace", lambda *a, **kw: (_ for _ in ()).throw(OSError("mock failure")))
+    import pytest
+    with pytest.raises(OSError):
+        write_entry(entry, fm, "body\n", tmp_path)
+    tmp_files = list(tmp_path.rglob("*.tmp"))
+    assert len(tmp_files) == 0
+
+
+# TC-WRITE-12
+def test_none_frontmatter_renders_as_null(tmp_path):
+    from jkb.models.entry import NormalizedEntry
+    from jkb.stages.write import write_entry
+    from datetime import datetime, timezone
+    entry = NormalizedEntry(
+        uuid="NULL01", journal="Test",
+        creation_date=datetime(2020,6,15,10,30,tzinfo=timezone.utc),
+    )
+    fm = {"date": "2020-06-15T10:30:00Z", "journal": "Test", "starred": False, "location": None, "weather": None, "activity": None, "device": None, "timezone": "UTC", "tags": [], "people": [], "pinned": False, "duration_seconds": None, "modified": None}
+    path = write_entry(entry, fm, "body\n", tmp_path)
+    content = path.read_text(encoding="utf-8")
+    assert "device:" in content
+    # Should render as null, not empty string
+    assert "device: ''" not in content
+
+
+# TC-WRITE-13
+def test_quote_datetime_strings_recurses_into_nested():
+    from jkb.stages.write import _quote_datetime_strings
+    from ruamel.yaml.scalarstring import DoubleQuotedScalarString
+    data = {"outer": {"inner": "2020-06-15T10:30:00Z"}}
+    result = _quote_datetime_strings(data)
+    assert isinstance(result["outer"]["inner"], DoubleQuotedScalarString)

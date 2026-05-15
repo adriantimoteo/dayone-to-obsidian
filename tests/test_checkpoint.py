@@ -75,3 +75,39 @@ def test_idempotent_mark_done(tmp_path):
     cp.mark_done(STAGE_WRITE, "uuid-1")
     cp.mark_done(STAGE_WRITE, "uuid-1")
     assert cp.counts(STAGE_WRITE)["done"] == 1
+
+
+# TC-CP-08
+def test_version_mismatch_starts_fresh(tmp_path):
+    from jkb.utils.checkpoint import Checkpoint, STAGE_WRITE
+    chk_path = tmp_path / "cp.json"
+    import json
+    chk_path.write_text(json.dumps({"version": 99, "stages": {}}), encoding="utf-8")
+    cp = Checkpoint(chk_path)
+    assert cp.is_done(STAGE_WRITE, "any-uuid") is False
+
+
+# TC-CP-09
+def test_mark_done_idempotent_on_disk(tmp_path):
+    from jkb.utils.checkpoint import Checkpoint, STAGE_WRITE
+    import json
+    chk_path = tmp_path / "cp.json"
+    cp = Checkpoint(chk_path)
+    cp.mark_done(STAGE_WRITE, "uuid-1")
+    cp.mark_done(STAGE_WRITE, "uuid-1")
+    cp.mark_done(STAGE_WRITE, "uuid-1")
+    data = json.loads(chk_path.read_text(encoding="utf-8"))
+    assert data["stages"][STAGE_WRITE]["done"].count("uuid-1") == 1
+
+
+# TC-CP-10
+def test_clear_resets_counts(tmp_path):
+    from jkb.utils.checkpoint import Checkpoint, STAGE_WRITE
+    chk_path = tmp_path / "cp.json"
+    cp = Checkpoint(chk_path)
+    for i in range(5):
+        cp.mark_done(STAGE_WRITE, f"uuid-{i}")
+    cp.mark_failed(STAGE_WRITE, "fail-1", "error")
+    cp.mark_failed(STAGE_WRITE, "fail-2", "error")
+    cp.clear()
+    assert cp.counts(STAGE_WRITE) == {"done": 0, "failed": 0}

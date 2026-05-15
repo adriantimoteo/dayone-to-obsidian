@@ -93,3 +93,54 @@ def test_missing_values_are_none_not_empty_string():
     fm = build_frontmatter(_entry())
     assert fm["device"] is None
     assert fm["duration_seconds"] is None
+
+
+# TC-FM-10, 11, 12
+import pytest
+
+@pytest.mark.parametrize("place,locality,expected_name", [
+    ("Boracay", None, "Boracay"),
+    (None, "Aklan", "Aklan"),
+    ("Boracay", "Malay", "Boracay, Malay"),
+])
+def test_location_name_combinations(place, locality, expected_name):
+    entry = _entry(location=DayOneLocation(placeName=place, localityName=locality))
+    fm = build_frontmatter(entry)
+    assert fm["location"]["name"] == expected_name
+
+
+# TC-FM-13
+def test_location_partial_coords_is_none():
+    entry = _entry(location=DayOneLocation(latitude=14.55, longitude=None))
+    fm = build_frontmatter(entry)
+    assert fm["location"]["coords"] is None
+
+
+# TC-FM-14
+def test_location_user_label():
+    entry = _entry(location=DayOneLocation(userLabel="Home"))
+    fm = build_frontmatter(entry)
+    assert fm["location"]["label"] == "Home"
+
+
+# TC-FM-15
+def test_duration_seconds_propagated():
+    entry = _entry(duration_seconds=120)
+    fm = build_frontmatter(entry)
+    assert fm["duration_seconds"] == 120
+
+
+# TC-FM-16
+def test_weather_humidity_zero_preserved():
+    from jkb.models.dayone import DayOneWeather
+    entry = _entry(weather=DayOneWeather(relativeHumidity=0))
+    fm = build_frontmatter(entry)
+    assert fm["weather"]["humidity"] == 0
+
+
+# TC-FM-17
+def test_starred_and_pinned_propagated():
+    entry = _entry(starred=True, pinned=True)
+    fm = build_frontmatter(entry)
+    assert fm["starred"] is True
+    assert fm["pinned"] is True
