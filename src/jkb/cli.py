@@ -1,14 +1,20 @@
 from __future__ import annotations
 import logging
+import os
 from pathlib import Path
 
 import typer
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 
 from jkb.index.embedder import get_embedder
 from jkb.index.manifest import Manifest
 from jkb.index.pipeline import run_index
 from jkb.index.vectorstore import VectorStore
 from jkb.pipeline import process_entry
+from jkb.query.search import HybridSearcher
+from jkb.query.synthesizer import Synthesizer
 from jkb.stages.parse import parse
 from jkb.stages.validate import validate
 from jkb.utils.checkpoint import Checkpoint
@@ -106,3 +112,78 @@ def index(
         f"Index complete: {stats.added} added, {stats.updated} updated, "
         f"{stats.removed} removed, {stats.skipped} skipped."
     )
+
+
+@app.command()
+def ask(
+    question: str = typer.Argument(..., help="Natural-language question to ask your journal"),
+    model: str = typer.Option("claude-haiku-4-5-20251001", "--model", help="LLM model to use for synthesis"),
+    k: int = typer.Option(10, "--k", help="Number of chunks to retrieve"),
+    vault: Path = typer.Option(None, "--vault", help="Path to the vault directory (default: $JKB_VAULT or ./.chroma)"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show retrieved chunks before the answer"),
+) -> None:
+    """Ask a natural-language question and get an answer grounded in your journal."""
+    console = Console()
+
+    try:
+        import anthropic  # noqa: PLC0415
+    except ImportError:
+        typer.echo("Error: anthropic package is not installed. Run `uv add anthropic` to enable LLM synthesis.", err=True)
+        raise typer.Exit(code=1)
+
+    vault_path: Path
+    if vault is not None:
+        vault_path = vault
+    else:
+        env_vault = os.environ.get("JKB_VAULT")
+        vault_path = Path(env_vault) if env_vault else Path(".chroma")
+
+    chroma_path = vault_path if vault_path.name == ".chroma" else vault_path / ".chroma"
+
+    if not chroma_path.exists():
+        typer.echo(
+            f"Error: chroma directory does not exist: {chroma_path}\n"
+            "Run `jkb index <vault>` first to build the index.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        client = anthropic.Anthropic()
+    except Exception as exc:
+        typer.echo(f"Error initialising Anthropic client: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    console.print("Searching your journal...", style="bold")
+
+    store = VectorStore(chroma_path)
+    embedder = get_embedder("nomic")
+    searcher = HybridSearcher(store, embedder)
+
+    results = searcher.search(question, k=k)
+
+    if not results:
+        console.print("[yellow]No results found in your journal for that query.[/yellow]")
+        raise typer.Exit(code=0)
+
+    if verbose:
+        table = Table(title="Retrieved Chunks", show_lines=True)
+        table.add_column("Entry ID", style="cyan", no_wrap=True)
+        table.add_column("Score", style="magenta", justify="right")
+        table.add_column("Excerpt")
+        for r in results:
+            excerpt = r.text[:200].replace("\n", " ")
+            if len(r.text) > 200:
+                excerpt += "..."
+            table.add_row(r.entry_id, f"{r.score:.3f}", excerpt)
+        console.print(table)
+
+    synthesizer = Synthesizer(client, model=model)
+    synthesis = synthesizer.synthesize(question, results)
+
+    console.print(Panel(synthesis.answer, title="Answer", border_style="green"))
+
+    if synthesis.sources:
+        console.print("\n[bold]Sources:[/bold]")
+        for source in synthesis.sources:
+            console.print(f"  • {source}")
